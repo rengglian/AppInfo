@@ -87,8 +87,6 @@ include/divisible/*
 
 .idea/*.xml
 
-build/
-
 include/*
 lib/*
 bin/*
@@ -107,3 +105,6 @@ include/*
 lib/*
 bin/*
 test/test_runner
+
+##vscode
+.vscode/
