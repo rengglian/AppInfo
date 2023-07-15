@@ -9,39 +9,55 @@
 #include <sys/types.h>
 #include <sched.h>
 #include <signal.h>
-#include <bitset>
 #include <iomanip>
+#include <bitset>
 
-void printSchedulerDetails(pid_t id, int indent) {
+std::string GetCommand(int pid) {
+    std::string path = "/proc/" + std::to_string(pid) + "/comm";
+    std::ifstream cmdFile(path);
+    
+    if (!cmdFile) {
+        // Handle error if needed, for instance:
+        // throw std::runtime_error("Could not open " + path);
+        return "";
+    }
+
+    std::string cmdLine;
+    std::getline(cmdFile, cmdLine);
+    return cmdLine;
+}
+
+void printSchedulerDetails(pid_t id) {
     // Get and print scheduler policy
     int policy = sched_getscheduler(id);
+    std::cout << "  ";
     switch (policy) {
     case SCHED_OTHER:
-        std::cout << std::setw(indent) << "Scheduler: SCHED_OTHER" << std::endl;
+        std::cout << "Scheduler: SCHED_OTHER" << std::endl;
         break;
     case SCHED_FIFO:
-        std::cout << std::setw(indent)<< "Scheduler: SCHED_FIFO" << std::endl;
+        std::cout << "Scheduler: SCHED_FIFO" << std::endl;
         break;
     case SCHED_RR:
-        std::cout << std::setw(indent) << "Scheduler: SCHED_RR" << std::endl;
+        std::cout << "Scheduler: SCHED_RR" << std::endl;
         break;
 #ifdef SCHED_BATCH   // Since Linux 2.6.16
     case SCHED_BATCH:
-        std::cout << std::setw(indent) << "Scheduler: SCHED_BATCH" << std::endl;
+        std::cout << "Scheduler: SCHED_BATCH" << std::endl;
         break;
 #endif
 #ifdef SCHED_IDLE    // Since Linux 2.6.23
     case SCHED_IDLE:
-        std::cout << std::setw(indent) << "Scheduler: SCHED_IDLE" << std::endl;
+        std::cout << "Scheduler: SCHED_IDLE" << std::endl;
         break;
 #endif
 #ifdef SCHED_DEADLINE    // Since Linux 3.14
     case SCHED_DEADLINE:
-        std::cout << std::setw(indent) << "Scheduler: SCHED_DEADLINE" << std::endl;
+        std::cout << "Scheduler: SCHED_DEADLINE" << std::endl;
         break;
 #endif
     default:
-        std::cout << std::setw(indent) << "Scheduler: Unknown" << std::endl;
+        std::cout << "Scheduler: Unknown" << std::endl;
         break;
     }
 
@@ -50,27 +66,7 @@ void printSchedulerDetails(pid_t id, int indent) {
     if (sched_getparam(id, &param) == -1) {
         std::cerr << "Error getting scheduler priority for Thread ID " << id << std::endl;
     } else {
-        std::cout << std::setw(indent-2) << "Scheduler Priority: " << param.sched_priority << std::endl;
-    }
-}
-
-void printThreadDetails(pid_t pid) {
-    std::string task_dir = "/proc/" + std::to_string(pid) + "/task/";
-    DIR *dir;
-    struct dirent *ent;
-    if ((dir = opendir(task_dir.c_str())) != NULL) {
-        while ((ent = readdir(dir)) != NULL) {
-            if (isdigit(ent->d_name[0])) {
-                std::cout << "\t"<< "Thread ID: " << ent->d_name << std::endl;
-                
-                // Convert thread ID from string to int
-                pid_t tid = std::stoi(ent->d_name);
-                printSchedulerDetails(tid, 34);
-            }
-        }
-        closedir(dir);
-    } else {
-        std::cerr << "Error opening " << task_dir << std::endl;
+        std::cout << "  " << "Scheduler Priority: " << param.sched_priority << std::endl;
     }
 }
 
@@ -81,24 +77,40 @@ void printProcessDetails(pid_t pid) {
         std::cerr << "Error opening status file for PID " << pid << std::endl;
         return;
     }
-
-    std::cout << "PID: " << pid << std::endl;
-
     std::string line;
     while (std::getline(status, line)) {
-        if (line.find("Name:") == 0 || line.find("State:") == 0) {
-            std::cout << "\t" << line << std::endl;
+        if (line.find("Name:") == 0 || line.find("State:") == 0 || line.find("Cpus_allowed_list:") == 0) {
+            std::cout << "  " << line << std::endl;
         }
         if (line.find("Cpus_allowed:") == 0) {
             std::string cpus_hex = line.substr(line.find_last_of("\t")+1);
             std::bitset<8> cpus_bin(std::stol(cpus_hex, nullptr, 16));
-            std::cout << "\t" << "Cpus_allowed: " << cpus_bin.count() << " (" << cpus_bin << ")" << std::endl;
-        }        
+            std::cout << "  " << "Cpus_allowed: " << cpus_bin.count() << " (" << cpus_bin << ")" << std::endl;
+        }         
     }
     status.close();
-    printSchedulerDetails(pid, 30);
-    printThreadDetails(pid);
-    
+    printSchedulerDetails(pid);
+}
+
+void printThreadDetails(pid_t pid) {
+    std::string task_dir = "/proc/" + std::to_string(pid) + "/task/";
+    DIR *dir;
+    struct dirent *ent;
+    if ((dir = opendir(task_dir.c_str())) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            if (isdigit(ent->d_name[0])) {
+                // Convert thread ID from string to int
+                pid_t tid = std::stoi(ent->d_name);
+
+                std::cout << " " << "Thread ID: " << tid << " " << GetCommand(tid) << std::endl;
+
+                printProcessDetails(tid);
+            }
+        }
+        closedir(dir);
+    } else {
+        std::cerr << "Error opening " << task_dir << std::endl;
+    }
 }
 
 void killProcess(pid_t pid) {
@@ -135,7 +147,9 @@ int main(int argc, char *argv[]) {
                     std::istringstream iss(line);
                     std::string arg;
                     if (std::getline(iss, arg, '\0') && arg.find(app_name) != std::string::npos) {
+                        std::cout << "PID: " << pid << " " << GetCommand(pid) << std::endl;
                         printProcessDetails(pid);
+                        printThreadDetails(pid);
                         if (should_kill) {
                             killProcess(pid);
                         }
